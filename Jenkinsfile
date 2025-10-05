@@ -12,6 +12,7 @@ pipeline {
         SERVER_CREDENTIALS='yogesh-b12-cicd'
         REMOTE_USER="ubuntu"
         REMOTE_HOST="35.182.252.169"
+        NOTIFICATION_EMAIL="yogi9016@gmail.com"
     }
 
     stages {
@@ -128,10 +129,18 @@ pipeline {
 
     post {
         success {
-            echo "✅ Deployment succeeded!"
+            emailext (
+                to: "${NOTIFICATION_EMAIL}",
+                subject: "SUCCESS: Jenkins Build #${env.BUILD_NUMBER}",
+                body: "The build and deployment succeeded for ${env.JOB_NAME} #${env.BUILD_NUMBER}."
+            )
         }
         failure {
-            echo "❌ Deployment failed!"
+            emailext (
+                to: "${NOTIFICATION_EMAIL}",
+                subject: "FAILED: Jenkins Build #${env.BUILD_NUMBER}",
+                body: "The build failed for ${env.JOB_NAME} #${env.BUILD_NUMBER}. Please check the logs."
+            )
         }
     }
 }
