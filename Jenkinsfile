@@ -3,90 +3,126 @@ pipeline {
 
     environment {
         APP_NAME = "flask-cicd-demo"
-        GIT_REPO = "https://github.com/<your-username>/python-sample-flask.git"
+        APP_DIR = "/home/ubuntu/vlearn-cicd-pipeline-using-jenkins"
+        GIT_REPO = "https://github.com/yogi9016/vlearn-cicd-pipeline-using-jenkins.git"
+        GIT_BRANCH = "main"
         DOCKER_IMAGE = "flask-cicd-demo:latest"
         CONTAINER_NAME = "flask-cicd-container"
         APP_PORT = "5000"
+        SERVER_CREDENTIALS='yogesh-b12-cicd'
+        REMOTE_USER="ubuntu"
+        REMOTE_HOST="35.182.252.169"
     }
 
     stages {
-
-        stage('Check Dependencies') {
-            steps {
-                echo 'Checking required dependencies...'
-
-                // Check Docker
-                sh '''
-                if ! command -v docker &> /dev/null; then
-                    echo "Docker not found. Installing Docker..."
-                    sudo apt-get update && sudo apt-get install -y docker.io
-                else
-                    echo "Docker is already installed."
-                fi
-
-                // Check NGINX
-                if ! command -v nginx &> /dev/null; then
-                    echo "NGINX not found. Installing NGINX..."
-                    sudo apt-get install -y nginx
-                else
-                    echo "NGINX is already installed."
-                fi
-
-                // Check Git
-                if ! command -v git &> /dev/null; then
-                    echo "Git not found. Installing Git..."
-                    sudo apt-get install -y git
-                else
-                    echo "Git is already installed."
-                fi
-
-                echo "Checking services..."
-                sudo systemctl is-active --quiet docker && echo "Docker running ✅" || echo "Docker not running ❌"
-                sudo systemctl is-active --quiet nginx && echo "NGINX running ✅" || echo "NGINX not running ❌"
-                '''
-            }
-        }
-
         stage('Checkout') {
             steps {
-                echo 'Cloning the repository...'
                 git branch: 'main', url: "${GIT_REPO}"
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Deploy to Remote') {
             steps {
-                echo 'Building Docker image...'
-                sh '''
-                docker build -t ${DOCKER_IMAGE} .
-                '''
+                echo 'Deploying application to remote server...'
+                sshagent (credentials: ["${SERVER_CREDENTIALS}"]) {
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} "
+                        set -e
+                        echo 'Checking dependencies...'
+                        for pkg in docker.io nginx git; do
+                            if ! command -v \$pkg &> /dev/null; then
+                                echo '\$pkg not found. Installing...'
+                                sudo apt-get update && sudo apt-get install -y \$pkg
+                            else
+                                echo '\$pkg already installed.'
+                            fi
+                        done
+                    "
+                    """
+                }
             }
         }
-
-        stage('Run Application') {
+        stage('Checkout on Remote') {
             steps {
-                echo 'Starting the Flask application container...'
-                sh '''
-                # Stop old container if running
-                if [ "$(docker ps -q -f name=${CONTAINER_NAME})" ]; then
-                    docker stop ${CONTAINER_NAME}
-                    docker rm ${CONTAINER_NAME}
-                fi
+                echo 'Checking out code on remote server...'
+                sshagent (credentials: ["${SERVER_CREDENTIALS}"]) {
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} "
+                        set -e
+                        APP_DIR=${APP_DIR}
 
-                docker run -d --name ${CONTAINER_NAME} -p 5000:5000 ${DOCKER_IMAGE}
-                '''
+                        if [ -d ${APP_DIR} ]; then
+                            echo 'Repository exists, pulling latest changes...'
+                            cd ${APP_DIR} && git reset --hard && git pull origin main
+                        else
+                            echo 'Cloning repository...'
+                            cd ~/ && git clone -b main ${GIT_REPO} \$APP_DIR
+                        fi
+                    "
+                    """
+                }
             }
         }
+        stage('Build & Test') {
+            steps {
+                echo 'Checking out code on remote server...'
+                sshagent (credentials: ["${SERVER_CREDENTIALS}"]) {
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} "
+                        cd ${APP_DIR}
+                        echo "Building Docker image..."
+                        sudo docker build -t ${DOCKER_IMAGE} .
+                    "
+                    """
+                }
+            }
+        }
+        stage('Deploy') {
+            steps {
+                echo 'Checking out code on remote server...'
+                sshagent (credentials: ["${SERVER_CREDENTIALS}"]) {
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} "
+                        cd ${APP_DIR}
+                        echo "Stopping existing container if running..."
+                        if [ "$(sudo docker ps -q -f name=${CONTAINER_NAME})" ]; then
+                            sudo docker stop ${CONTAINER_NAME}
+                            sudo docker rm ${CONTAINER_NAME}
+                        fi
 
+                        echo "Running new container..."
+                        sudo docker run -d --name ${CONTAINER_NAME} -p 5000:5000 ${DOCKER_IMAGE}
+
+                        echo "Checking NGINX status..."
+                        sudo systemctl status nginx --no-pager || true
+
+                        echo "Copying NGINX config..."
+                        sudo cp $APP_DIR/nginx.conf /etc/nginx/conf.d/app.conf
+
+                        echo "Testing NGINX configuration..."
+                        sudo nginx -t
+
+                        echo "Restarting NGINX..."
+                        sudo systemctl restart nginx
+
+                        echo "✅ Deployment completed successfully!"
+                    "
+                    """
+                }
+            }
+        }
         stage('Health Check') {
             steps {
-                echo 'Performing health check...'
                 script {
-                    def status = sh(script: "curl -s -o /dev/null -w '%{http_code}' http://localhost:${APP_PORT}/health", returnStdout: true).trim()
-                    if (status == "200") {
-                        echo "Health check passed ✅"
+                    echo "Performing Health Check from Jenkins server..."
+
+                    def healthUrl = "http://${REMOTE_HOST}"
+                    def responseCode = sh(script: "curl -s -o /dev/null -w '%{http_code}' ${healthUrl}", returnStdout: true).trim()
+
+                    if (responseCode == "200") {
+                        echo "✅ Health Check Passed! Application is reachable at ${healthUrl}"
                     } else {
-                        error("Health check failed ❌ - Status code: ${status}")
+                        error "❌ Health Check Failed! HTTP status code: ${responseCode}"
                     }
                 }
             }
@@ -95,18 +131,10 @@ pipeline {
 
     post {
         success {
-            emailext (
-                subject: "✅ Jenkins Build Succeeded: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: "The Flask CI/CD pipeline completed successfully!",
-                to: "team@example.com"
-            )
+            echo "✅ Deployment succeeded!"
         }
         failure {
-            emailext (
-                subject: "❌ Jenkins Build Failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: "The Flask CI/CD pipeline failed. Check Jenkins logs.",
-                to: "team@example.com"
-            )
+            echo "❌ Deployment failed!"
         }
     }
 }
