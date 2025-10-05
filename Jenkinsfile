@@ -22,7 +22,7 @@ pipeline {
             }
         }
 
-        stage('Deploy to Remote') {
+        stage('Install Dependencies on Remote') {
             steps {
                 echo 'Deploying application to remote server...'
                 sshagent (credentials: ["${SERVER_CREDENTIALS}"]) {
@@ -43,7 +43,7 @@ pipeline {
                 }
             }
         }
-        stage('Checkout on Remote') {
+        stage('Checkout Code on Remote') {
             steps {
                 echo 'Checking out code on remote server...'
                 sshagent (credentials: ["${SERVER_CREDENTIALS}"]) {
