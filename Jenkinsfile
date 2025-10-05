@@ -79,26 +79,23 @@ pipeline {
         }
         stage('Deploy') {
             steps {
-                echo 'Checking out code on remote server...'
+                echo 'Deploying container and NGINX setup...'
                 sshagent (credentials: ["${SERVER_CREDENTIALS}"]) {
                     sh """
-                    ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} "
+                    ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} '
+                        set -e
                         cd ${APP_DIR}
-                        echo "Stopping existing container if running..."
-                        if [ "$(sudo docker ps -q -f name=${CONTAINER_NAME})" ]; then
-                            sudo docker stop ${CONTAINER_NAME}
-                            sudo docker rm ${CONTAINER_NAME}
-                        fi
+
+                        echo "Stopping and removing old container if exists..."
+                        sudo docker rm -f ${CONTAINER_NAME} || true
 
                         echo "Running new container..."
-                        sudo docker run -d --name ${CONTAINER_NAME} -p 5000:5000 ${DOCKER_IMAGE}
-
-                        echo "Checking NGINX status..."
-                        sudo systemctl status nginx --no-pager || true
+                        sudo docker run -d --name ${CONTAINER_NAME} -p ${APP_PORT}:5000 ${DOCKER_IMAGE}
 
                         echo "Copying NGINX config..."
-                        sudo cp $APP_DIR/nginx.conf /etc/nginx/conf.d/app.conf
-
+                        sudo cp ${APP_DIR}/nginx.conf /etc/nginx/conf.d/app.conf
+                        sudo rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default
+                        
                         echo "Testing NGINX configuration..."
                         sudo nginx -t
 
@@ -106,7 +103,7 @@ pipeline {
                         sudo systemctl restart nginx
 
                         echo "✅ Deployment completed successfully!"
-                    "
+                    '
                     """
                 }
             }
