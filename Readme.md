@@ -22,9 +22,9 @@ Follow these steps to install Jenkins:
 
 ### 1️⃣ Update and install dependencies
 ```bash
-sudo apt update && sudo apt install -y fontconfig openjdk-11-jre
+sudo apt update && sudo apt install -y fontconfig openjdk-17-jdk
 ```
-Jenkins requires Java, so this installs **OpenJDK 11**.
+Jenkins requires Java, so this installs **OpenJDK 17**.
 
 ---
 
